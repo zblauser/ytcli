@@ -1,0 +1,23 @@
+# zig
+zig-out/
+.zig-cache/
+zig-cache/
+zig-pkg/
+
+# objects
+*.o
+*.dSYM/
+
+# os/editor
+.DS_Store
+**/.DS_Store
+*~
+*.swp
+
+# tests
+cookies.txt
+*.cookies
+.env
+.env.*
+*.log
+/tmp/ytcli_*

@@ -1,0 +1,325 @@
+const std = @import("std");
+
+const INNERTUBE_KEY = "AIzaSyC9XL3ZjWddXya6X74dJoCTL-WEYFDNX30";
+const SEARCH_URL = "https://music.youtube.com/youtubei/v1/search?key=" ++ INNERTUBE_KEY ++ "&prettyPrint=false";
+const TMP_BODY_PATH = "/tmp/ytcli_search_body.json";
+
+const c = @cImport({
+    @cInclude("stdio.h");
+});
+
+pub const Track = struct {
+    video_id: []const u8 = "",
+    browse_id: []const u8 = "",
+    title: []const u8,
+    artist: []const u8,
+    kind: []const u8 = "Song",
+
+    pub fn isPlayable(self: Track) bool {
+        return self.video_id.len > 0;
+    }
+};
+
+pub const Filter = enum {
+    all,
+    songs,
+    videos,
+    albums,
+    artists,
+
+    pub fn label(self: Filter) []const u8 {
+        return switch (self) {
+            .all => "all",
+            .songs => "songs",
+            .videos => "videos",
+            .albums => "albums",
+            .artists => "artists",
+        };
+    }
+
+    pub fn params(self: Filter) []const u8 {
+        return switch (self) {
+            .all => "",
+            .songs => "EgWKAQIIAWoKEAkQBRAKEAMQBA%3D%3D",
+            .videos => "EgWKAQIQAWoKEAkQChAFEAMQBA%3D%3D",
+            .albums => "EgWKAQIYAWoKEAkQChAFEAMQBA%3D%3D",
+            .artists => "EgWKAQIgAWoKEAkQChAFEAMQBA%3D%3D",
+        };
+    }
+};
+
+pub const Error = error{
+    HttpFailed,
+    TempFileOpen,
+    TempFileWrite,
+    NoResult,
+} || std.mem.Allocator.Error || std.process.RunError;
+
+pub fn search(arena: std.mem.Allocator, gpa: std.mem.Allocator, io: std.Io, query: []const u8, max: usize) ![]Track {
+    return searchFiltered(arena, gpa, io, query, max, .all);
+}
+
+pub fn searchFiltered(
+    arena: std.mem.Allocator,
+    gpa: std.mem.Allocator,
+    io: std.Io,
+    query: []const u8,
+    max: usize,
+    filter: Filter,
+) ![]Track {
+    const body = try buildBodyFiltered(arena, query, filter);
+    try writeTempFile(TMP_BODY_PATH, body);
+
+    const resp = try runCapture(gpa, io, &.{
+        "curl", "-sS",
+        "-H",   "Content-Type: application/json",
+        "-H",   "User-Agent: Mozilla/5.0",
+        "-X",   "POST",
+        "--data-binary", "@" ++ TMP_BODY_PATH,
+        SEARCH_URL,
+    });
+    defer gpa.free(resp);
+
+    const parsed = try std.json.parseFromSlice(std.json.Value, arena, resp, .{});
+
+    var out: std.ArrayList(Track) = .empty;
+    try collectTracks(arena, parsed.value, &out, max);
+    if (out.items.len == 0) return error.NoResult;
+    return out.toOwnedSlice(arena);
+}
+
+fn collectTracks(arena: std.mem.Allocator, v: std.json.Value, out: *std.ArrayList(Track), max: usize) !void {
+    if (out.items.len >= max) return;
+    switch (v) {
+        .object => |obj| {
+            if (obj.get("musicResponsiveListItemRenderer")) |item| {
+                if (extractTrack(arena, item)) |t| {
+                    try out.append(arena, t);
+                }
+            }
+            var it = obj.iterator();
+            while (it.next()) |entry| {
+                try collectTracks(arena, entry.value_ptr.*, out, max);
+                if (out.items.len >= max) return;
+            }
+        },
+        .array => |arr| {
+            for (arr.items) |item| {
+                try collectTracks(arena, item, out, max);
+                if (out.items.len >= max) return;
+            }
+        },
+        else => {},
+    }
+}
+
+fn extractTrack(arena: std.mem.Allocator, item: std.json.Value) ?Track {
+    if (item != .object) return null;
+    const obj = item.object;
+
+    var video_id_str: []const u8 = "";
+    var browse_id_str: []const u8 = "";
+    if (obj.get("playlistItemData")) |pid| {
+        if (pid == .object) {
+            if (pid.object.get("videoId")) |vid| {
+                if (vid == .string) video_id_str = vid.string;
+            }
+        }
+    }
+    if (obj.get("navigationEndpoint")) |nav| {
+        if (nav == .object) {
+            if (nav.object.get("browseEndpoint")) |be| {
+                if (be == .object) {
+                    if (be.object.get("browseId")) |bid| {
+                        if (bid == .string) browse_id_str = bid.string;
+                    }
+                }
+            }
+        }
+    }
+    if (video_id_str.len == 0 and browse_id_str.len == 0) return null;
+
+    const flex = obj.get("flexColumns") orelse return null;
+    if (flex != .array or flex.array.items.len == 0) return null;
+
+    const title = flexText(flex.array.items[0]) orelse return null;
+    var artist: []const u8 = "unknown";
+    var kind: []const u8 = "Song";
+    if (flex.array.items.len > 1) {
+        if (flexRuns(flex.array.items[1])) |r| {
+            if (r.len >= 1) {
+                if (textOfRun(r[0])) |t0| {
+                    if (isKindWord(t0)) kind = t0;
+                }
+            }
+            artist = firstLinkedRunText(r) orelse positionalArtist(r) orelse artist;
+        }
+    }
+
+    return .{
+        .video_id = arena.dupe(u8, video_id_str) catch return null,
+        .browse_id = arena.dupe(u8, browse_id_str) catch return null,
+        .title = arena.dupe(u8, title) catch return null,
+        .artist = arena.dupe(u8, artist) catch return null,
+        .kind = arena.dupe(u8, kind) catch return null,
+    };
+}
+
+const BROWSE_URL = "https://music.youtube.com/youtubei/v1/browse?key=" ++ INNERTUBE_KEY ++ "&prettyPrint=false";
+const TMP_BROWSE_PATH = "/tmp/ytcli_browse_body.json";
+
+pub fn browseAlbum(arena: std.mem.Allocator, gpa: std.mem.Allocator, io: std.Io, browse_id: []const u8) ![]Track {
+    const body = try std.fmt.allocPrint(arena,
+        \\{{"context":{{"client":{{"clientName":"WEB_REMIX","clientVersion":"1.20240101.00.00","hl":"en","gl":"US"}},"user":{{}}}},"browseId":"{s}"}}
+    , .{browse_id});
+    try writeTempFile(TMP_BROWSE_PATH, body);
+
+    const resp = try runCapture(gpa, io, &.{
+        "curl",          "-sS",
+        "-H",            "Content-Type: application/json",
+        "-H",            "User-Agent: Mozilla/5.0",
+        "-X",            "POST",
+        "--data-binary", "@" ++ TMP_BROWSE_PATH,
+        BROWSE_URL,
+    });
+    defer gpa.free(resp);
+
+    const parsed = try std.json.parseFromSlice(std.json.Value, arena, resp, .{});
+    var out: std.ArrayList(Track) = .empty;
+    try collectTracks(arena, parsed.value, &out, 256);
+    if (out.items.len == 0) return error.NoResult;
+
+    if (findAlbumArtist(parsed.value)) |alb| {
+        const dup = arena.dupe(u8, alb) catch alb;
+        for (out.items) |*t| {
+            if (std.mem.eql(u8, t.artist, "unknown")) t.artist = dup;
+        }
+    }
+    return out.toOwnedSlice(arena);
+}
+
+fn isKindWord(s: []const u8) bool {
+    const words = [_][]const u8{ "Song", "Video", "Album", "Single", "EP", "Artist", "Playlist", "Episode", "Podcast" };
+    for (words) |w| if (std.mem.eql(u8, s, w)) return true;
+    return false;
+}
+
+fn runHasNav(v: std.json.Value) bool {
+    if (v != .object) return false;
+    const nav = v.object.get("navigationEndpoint") orelse return false;
+    return nav == .object;
+}
+
+fn firstLinkedRunText(runs: []std.json.Value) ?[]const u8 {
+    for (runs) |run| {
+        if (runHasNav(run)) {
+            if (textOfRun(run)) |t| return t;
+        }
+    }
+    return null;
+}
+
+fn positionalArtist(runs: []std.json.Value) ?[]const u8 {
+    if (runs.len >= 3) return textOfRun(runs[2]);
+    if (runs.len >= 1) return textOfRun(runs[0]);
+    return null;
+}
+
+fn findAlbumArtist(v: std.json.Value) ?[]const u8 {
+    switch (v) {
+        .object => |obj| {
+            if (obj.get("navigationEndpoint")) |nav| {
+                if (nav == .object) {
+                    if (nav.object.get("browseEndpoint")) |be| {
+                        if (be == .object) {
+                            if (be.object.get("browseId")) |bid| {
+                                if (bid == .string and std.mem.startsWith(u8, bid.string, "UC")) {
+                                    if (textOfRun(v)) |t| return t;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            var it = obj.iterator();
+            while (it.next()) |entry| {
+                if (findAlbumArtist(entry.value_ptr.*)) |a| return a;
+            }
+        },
+        .array => |arr| {
+            for (arr.items) |item| {
+                if (findAlbumArtist(item)) |a| return a;
+            }
+        },
+        else => {},
+    }
+    return null;
+}
+
+fn flexRuns(v: std.json.Value) ?[]std.json.Value {
+    if (v != .object) return null;
+    const inner = v.object.get("musicResponsiveListItemFlexColumnRenderer") orelse return null;
+    if (inner != .object) return null;
+    const text = inner.object.get("text") orelse return null;
+    if (text != .object) return null;
+    const runs = text.object.get("runs") orelse return null;
+    if (runs != .array) return null;
+    return runs.array.items;
+}
+
+fn textOfRun(v: std.json.Value) ?[]const u8 {
+    if (v != .object) return null;
+    const s = v.object.get("text") orelse return null;
+    if (s != .string) return null;
+    return s.string;
+}
+
+fn flexText(v: std.json.Value) ?[]const u8 {
+    if (v != .object) return null;
+    const inner = v.object.get("musicResponsiveListItemFlexColumnRenderer") orelse return null;
+    if (inner != .object) return null;
+    const text = inner.object.get("text") orelse return null;
+    if (text != .object) return null;
+    const runs = text.object.get("runs") orelse return null;
+    if (runs != .array or runs.array.items.len == 0) return null;
+    const first = runs.array.items[0];
+    if (first != .object) return null;
+    const s = first.object.get("text") orelse return null;
+    if (s != .string) return null;
+    return s.string;
+}
+
+fn buildBodyFiltered(arena: std.mem.Allocator, query: []const u8, filter: Filter) ![]u8 {
+    const escaped = try std.json.Stringify.valueAlloc(arena, query, .{});
+    const params = filter.params();
+    if (params.len == 0) {
+        return std.fmt.allocPrint(arena,
+            \\{{"context":{{"client":{{"clientName":"WEB_REMIX","clientVersion":"1.20240101.00.00","hl":"en","gl":"US"}},"user":{{}}}},"query":{s}}}
+        , .{escaped});
+    }
+    return std.fmt.allocPrint(arena,
+        \\{{"context":{{"client":{{"clientName":"WEB_REMIX","clientVersion":"1.20240101.00.00","hl":"en","gl":"US"}},"user":{{}}}},"query":{s},"params":"{s}"}}
+    , .{ escaped, params });
+}
+
+fn writeTempFile(path: [:0]const u8, body: []const u8) !void {
+    const f = c.fopen(path, "wb") orelse return error.TempFileOpen;
+    defer _ = c.fclose(f);
+    const n = c.fwrite(body.ptr, 1, body.len, f);
+    if (n != body.len) return error.TempFileWrite;
+}
+
+fn runCapture(gpa: std.mem.Allocator, io: std.Io, argv: []const []const u8) ![]u8 {
+    const result = try std.process.run(gpa, io, .{ .argv = argv });
+    defer gpa.free(result.stderr);
+    errdefer gpa.free(result.stdout);
+    switch (result.term) {
+        .exited => |code| if (code != 0) {
+            std.debug.print("argv[0]={s} exit {d}: {s}\n", .{ argv[0], code, result.stderr });
+            return error.HttpFailed;
+        },
+        else => return error.HttpFailed,
+    }
+    return result.stdout;
+}
+
