@@ -4,7 +4,7 @@ TUI client for yt music<br>
 search, browse, and play from your terminal
 
 <p align="center">
-  <img src="image.gif" alt="ytcli searching, browsing, and playing" width="82%"/>
+  <img src="assets/ytcli.gif" alt="ytcli searching, browsing, and playing" width="82%"/>
 </p>
 
 <p align="center">
