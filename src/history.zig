@@ -1,10 +1,8 @@
 const std = @import("std");
+const fsutil = @import("fsutil.zig");
 
 const c = @cImport({
     @cInclude("stdio.h");
-    @cInclude("sys/stat.h");
-    @cInclude("errno.h");
-    @cInclude("string.h");
 });
 
 pub fn path(arena: std.mem.Allocator, env: *std.process.Environ.Map) ![]const u8 {
@@ -16,19 +14,7 @@ pub fn path(arena: std.mem.Allocator, env: *std.process.Environ.Map) ![]const u8
 }
 
 pub fn load(arena: std.mem.Allocator, file_path: []const u8) ![][]const u8 {
-    const path_z = try arena.dupeZ(u8, file_path);
-    const f = c.fopen(path_z.ptr, "rb") orelse return &.{};
-    defer _ = c.fclose(f);
-
-    _ = c.fseek(f, 0, c.SEEK_END);
-    const size = c.ftell(f);
-    if (size <= 0) return &.{};
-    _ = c.fseek(f, 0, c.SEEK_SET);
-
-    const buf = try arena.alloc(u8, @intCast(size));
-    const n = c.fread(buf.ptr, 1, buf.len, f);
-    if (n == 0) return &.{};
-    const bytes = buf[0..n];
+    const bytes = fsutil.readFileAlloc(arena, file_path) orelse return &.{};
 
     var all: std.ArrayList([]const u8) = .empty;
     var it = std.mem.splitScalar(u8, bytes, '\n');
@@ -53,29 +39,13 @@ pub fn load(arena: std.mem.Allocator, file_path: []const u8) ![][]const u8 {
 
 pub fn append(arena: std.mem.Allocator, file_path: []const u8, query: []const u8) !void {
     if (std.fs.path.dirname(file_path)) |dir| {
-        try makePathZ(arena, dir);
+        try fsutil.makePathZ(arena, dir);
     }
     const path_z = try arena.dupeZ(u8, file_path);
     const f = c.fopen(path_z.ptr, "ab") orelse return error.OpenFailed;
     defer _ = c.fclose(f);
     if (c.fwrite(query.ptr, 1, query.len, f) != query.len) return error.WriteFailed;
     if (c.fwrite("\n", 1, 1, f) != 1) return error.WriteFailed;
-}
-
-fn makePathZ(arena: std.mem.Allocator, dir: []const u8) !void {
-    var i: usize = 0;
-    while (i < dir.len) {
-        while (i < dir.len and dir[i] == '/') : (i += 1) {}
-        const start = i;
-        while (i < dir.len and dir[i] != '/') : (i += 1) {}
-        if (i == start) break;
-        const partial = try arena.dupeZ(u8, dir[0..i]);
-        const r = c.mkdir(partial.ptr, 0o755);
-        if (r != 0) {
-            const e = std.c._errno().*;
-            if (e != c.EEXIST) return error.MkdirFailed;
-        }
-    }
 }
 
 pub fn match(arena: std.mem.Allocator, items: []const []const u8, prefix: []const u8, max: usize) ![][]const u8 {
@@ -87,4 +57,34 @@ pub fn match(arena: std.mem.Allocator, items: []const []const u8, prefix: []cons
         }
     }
     return out.toOwnedSlice(arena);
+}
+
+const testing = std.testing;
+
+test "match filters by case-insensitive prefix and honors max" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const items = [_][]const u8{ "Apple", "apricot", "banana", "AVOCADO" };
+
+    const ap = try match(a, &items, "ap", 10);
+    try testing.expectEqual(@as(usize, 2), ap.len);
+    try testing.expectEqualStrings("Apple", ap[0]);
+    try testing.expectEqualStrings("apricot", ap[1]);
+
+    const all_items = try match(a, &items, "", 10);
+    try testing.expectEqual(@as(usize, 4), all_items.len);
+
+    const capped = try match(a, &items, "", 2);
+    try testing.expectEqual(@as(usize, 2), capped.len);
+
+    const none = try match(a, &items, "zz", 10);
+    try testing.expectEqual(@as(usize, 0), none.len);
+}
+
+test "load returns empty for a missing file" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const got = try load(arena.allocator(), "/tmp/ytcli_does_not_exist_zzz");
+    try testing.expectEqual(@as(usize, 0), got.len);
 }

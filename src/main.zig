@@ -20,7 +20,7 @@ fn putStdout(bytes: []const u8) !void {
     }
 }
 
-pub const VERSION = "0.1.0";
+pub const VERSION = @import("build_options").version;
 
 pub fn main(init: std.process.Init) !void {
     const gpa = init.gpa;
@@ -115,7 +115,8 @@ fn joinArgs(arena: std.mem.Allocator, words: []const [:0]const u8) ![]u8 {
 }
 
 fn printHelp() !void {
-    const text =
+    var buf: [1024]u8 = undefined;
+    const text = std.fmt.bufPrint(&buf,
         \\ytcli — terminal YouTube Music client
         \\
         \\usage:
@@ -127,12 +128,12 @@ fn printHelp() !void {
         \\  ytcli -v, --version      print version
         \\
         \\options:
-        \\  --theme <name>           color theme (red, cyan, mono, dracula, nord, gruvbox)
+        \\  --theme <name>           color theme ({s})
         \\  --themes                 list available themes
         \\  YTCLI_THEME env          same as --theme
         \\  Ctrl+Y inside the TUI    cycle through themes live
         \\
-    ;
+    , .{theme_mod.names}) catch return error.WriteFailed;
     try putStdout(text);
 }
 

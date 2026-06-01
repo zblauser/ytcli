@@ -1,9 +1,9 @@
 const std = @import("std");
+const proc = @import("proc.zig");
 
 pub const Error = error{
-    HttpFailed,
     BadResponse,
-} || std.mem.Allocator.Error || std.process.RunError;
+} || std.mem.Allocator.Error || proc.Error;
 
 pub fn fetch(arena: std.mem.Allocator, gpa: std.mem.Allocator, io: std.Io, query: []const u8, max: usize) ![][]const u8 {
     if (query.len == 0) return &.{};
@@ -14,17 +14,10 @@ pub fn fetch(arena: std.mem.Allocator, gpa: std.mem.Allocator, io: std.Io, query
         .{escaped},
     );
 
-    const result = try std.process.run(gpa, io, .{ .argv = &.{
-        "curl", "-sS", "--max-time", "3", url,
-    } });
-    defer gpa.free(result.stderr);
-    defer gpa.free(result.stdout);
-    switch (result.term) {
-        .exited => |code| if (code != 0) return error.HttpFailed,
-        else => return error.HttpFailed,
-    }
+    const resp = try proc.runCapture(gpa, io, &.{ "curl", "-sS", "--max-time", "3", url });
+    defer gpa.free(resp);
 
-    const parsed = std.json.parseFromSlice(std.json.Value, arena, result.stdout, .{}) catch return error.BadResponse;
+    const parsed = std.json.parseFromSlice(std.json.Value, arena, resp, .{}) catch return error.BadResponse;
     if (parsed.value != .array or parsed.value.array.items.len < 2) return error.BadResponse;
     const sugs = parsed.value.array.items[1];
     if (sugs != .array) return error.BadResponse;
@@ -51,4 +44,16 @@ fn urlEscape(arena: std.mem.Allocator, s: []const u8) ![]const u8 {
         }
     }
     return buf.toOwnedSlice(arena);
+}
+
+const testing = std.testing;
+
+test "urlEscape leaves unreserved chars and percent-encodes the rest" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    try testing.expectEqualStrings("aZ0-_.~", try urlEscape(a, "aZ0-_.~"));
+    try testing.expectEqualStrings("daft%20punk", try urlEscape(a, "daft punk"));
+    try testing.expectEqualStrings("c%2B%2B", try urlEscape(a, "c++"));
+    try testing.expectEqualStrings("%26%3D%2F", try urlEscape(a, "&=/"));
 }

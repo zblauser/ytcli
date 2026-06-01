@@ -9,7 +9,7 @@ zig-pkg/
 *.dSYM/
 
 # os/editor
-.DS_Store
+*.DS_Store
 **/.DS_Store
 *~
 *.swp

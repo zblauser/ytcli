@@ -1,11 +1,23 @@
 const std = @import("std");
+const proc = @import("proc.zig");
 
+// Public InnerTube (YouTube Music WEB_REMIX) client key. Not a secret: this exact
+// key is served in every youtube music web page and is required to reach the
+// public youtubei endpoints. GitHub secret-scanning flags it by pattern; safe to keep.
 const INNERTUBE_KEY = "AIzaSyC9XL3ZjWddXya6X74dJoCTL-WEYFDNX30";
 const SEARCH_URL = "https://music.youtube.com/youtubei/v1/search?key=" ++ INNERTUBE_KEY ++ "&prettyPrint=false";
-const TMP_BODY_PATH = "/tmp/ytcli_search_body.json";
+const TMP_TEMPLATE = "/tmp/ytcli_bodyXXXXXX";
+
+// Shared InnerTube request context (WEB_REMIX client). Real braces — embedded
+// verbatim into request bodies, so allocPrint format strings only add the
+// surrounding object and per-call fields.
+const CLIENT_CONTEXT =
+    \\"context":{"client":{"clientName":"WEB_REMIX","clientVersion":"1.20240101.00.00","hl":"en","gl":"US"},"user":{}}
+;
 
 const c = @cImport({
-    @cInclude("stdio.h");
+    @cInclude("stdlib.h");
+    @cInclude("unistd.h");
 });
 
 pub const Track = struct {
@@ -49,11 +61,10 @@ pub const Filter = enum {
 };
 
 pub const Error = error{
-    HttpFailed,
     TempFileOpen,
     TempFileWrite,
     NoResult,
-} || std.mem.Allocator.Error || std.process.RunError;
+} || std.mem.Allocator.Error || proc.Error;
 
 pub fn search(arena: std.mem.Allocator, gpa: std.mem.Allocator, io: std.Io, query: []const u8, max: usize) ![]Track {
     return searchFiltered(arena, gpa, io, query, max, .all);
@@ -68,14 +79,16 @@ pub fn searchFiltered(
     filter: Filter,
 ) ![]Track {
     const body = try buildBodyFiltered(arena, query, filter);
-    try writeTempFile(TMP_BODY_PATH, body);
+    const body_path = try writeTempFile(arena, body);
+    defer _ = c.unlink(body_path.ptr);
+    const data_arg = try std.fmt.allocPrint(arena, "@{s}", .{body_path});
 
-    const resp = try runCapture(gpa, io, &.{
+    const resp = try proc.runCapture(gpa, io, &.{
         "curl", "-sS",
         "-H",   "Content-Type: application/json",
         "-H",   "User-Agent: Mozilla/5.0",
         "-X",   "POST",
-        "--data-binary", "@" ++ TMP_BODY_PATH,
+        "--data-binary", data_arg,
         SEARCH_URL,
     });
     defer gpa.free(resp);
@@ -166,20 +179,19 @@ fn extractTrack(arena: std.mem.Allocator, item: std.json.Value) ?Track {
 }
 
 const BROWSE_URL = "https://music.youtube.com/youtubei/v1/browse?key=" ++ INNERTUBE_KEY ++ "&prettyPrint=false";
-const TMP_BROWSE_PATH = "/tmp/ytcli_browse_body.json";
 
 pub fn browseAlbum(arena: std.mem.Allocator, gpa: std.mem.Allocator, io: std.Io, browse_id: []const u8) ![]Track {
-    const body = try std.fmt.allocPrint(arena,
-        \\{{"context":{{"client":{{"clientName":"WEB_REMIX","clientVersion":"1.20240101.00.00","hl":"en","gl":"US"}},"user":{{}}}},"browseId":"{s}"}}
-    , .{browse_id});
-    try writeTempFile(TMP_BROWSE_PATH, body);
+    const body = try std.fmt.allocPrint(arena, "{{{s},\"browseId\":\"{s}\"}}", .{ CLIENT_CONTEXT, browse_id });
+    const body_path = try writeTempFile(arena, body);
+    defer _ = c.unlink(body_path.ptr);
+    const data_arg = try std.fmt.allocPrint(arena, "@{s}", .{body_path});
 
-    const resp = try runCapture(gpa, io, &.{
+    const resp = try proc.runCapture(gpa, io, &.{
         "curl",          "-sS",
         "-H",            "Content-Type: application/json",
         "-H",            "User-Agent: Mozilla/5.0",
         "-X",            "POST",
-        "--data-binary", "@" ++ TMP_BROWSE_PATH,
+        "--data-binary", data_arg,
         BROWSE_URL,
     });
     defer gpa.free(resp);
@@ -275,51 +287,98 @@ fn textOfRun(v: std.json.Value) ?[]const u8 {
 }
 
 fn flexText(v: std.json.Value) ?[]const u8 {
-    if (v != .object) return null;
-    const inner = v.object.get("musicResponsiveListItemFlexColumnRenderer") orelse return null;
-    if (inner != .object) return null;
-    const text = inner.object.get("text") orelse return null;
-    if (text != .object) return null;
-    const runs = text.object.get("runs") orelse return null;
-    if (runs != .array or runs.array.items.len == 0) return null;
-    const first = runs.array.items[0];
-    if (first != .object) return null;
-    const s = first.object.get("text") orelse return null;
-    if (s != .string) return null;
-    return s.string;
+    const runs = flexRuns(v) orelse return null;
+    if (runs.len == 0) return null;
+    return textOfRun(runs[0]);
 }
 
 fn buildBodyFiltered(arena: std.mem.Allocator, query: []const u8, filter: Filter) ![]u8 {
     const escaped = try std.json.Stringify.valueAlloc(arena, query, .{});
     const params = filter.params();
     if (params.len == 0) {
-        return std.fmt.allocPrint(arena,
-            \\{{"context":{{"client":{{"clientName":"WEB_REMIX","clientVersion":"1.20240101.00.00","hl":"en","gl":"US"}},"user":{{}}}},"query":{s}}}
-        , .{escaped});
+        return std.fmt.allocPrint(arena, "{{{s},\"query\":{s}}}", .{ CLIENT_CONTEXT, escaped });
     }
-    return std.fmt.allocPrint(arena,
-        \\{{"context":{{"client":{{"clientName":"WEB_REMIX","clientVersion":"1.20240101.00.00","hl":"en","gl":"US"}},"user":{{}}}},"query":{s},"params":"{s}"}}
-    , .{ escaped, params });
+    return std.fmt.allocPrint(arena, "{{{s},\"query\":{s},\"params\":\"{s}\"}}", .{ CLIENT_CONTEXT, escaped, params });
 }
 
-fn writeTempFile(path: [:0]const u8, body: []const u8) !void {
-    const f = c.fopen(path, "wb") orelse return error.TempFileOpen;
-    defer _ = c.fclose(f);
-    const n = c.fwrite(body.ptr, 1, body.len, f);
-    if (n != body.len) return error.TempFileWrite;
+// Writes `body` to a freshly created temp file (random name, mode 0600 via
+// mkstemp) and returns its path. Avoids the predictable-path symlink/clobber
+// race of a fixed /tmp filename. Caller is responsible for unlinking.
+fn writeTempFile(arena: std.mem.Allocator, body: []const u8) ![:0]const u8 {
+    const path = try arena.dupeZ(u8, TMP_TEMPLATE);
+    const fd = c.mkstemp(path.ptr);
+    if (fd < 0) return error.TempFileOpen;
+    defer _ = c.close(fd);
+    var off: usize = 0;
+    while (off < body.len) {
+        const n = c.write(fd, body[off..].ptr, body.len - off);
+        if (n <= 0) return error.TempFileWrite;
+        off += @intCast(n);
+    }
+    return path;
 }
 
-fn runCapture(gpa: std.mem.Allocator, io: std.Io, argv: []const []const u8) ![]u8 {
-    const result = try std.process.run(gpa, io, .{ .argv = argv });
-    defer gpa.free(result.stderr);
-    errdefer gpa.free(result.stdout);
-    switch (result.term) {
-        .exited => |code| if (code != 0) {
-            std.debug.print("argv[0]={s} exit {d}: {s}\n", .{ argv[0], code, result.stderr });
-            return error.HttpFailed;
-        },
-        else => return error.HttpFailed,
-    }
-    return result.stdout;
+const testing = std.testing;
+
+test "Track.isPlayable, Filter labels/params, isKindWord" {
+    try testing.expect((Track{ .video_id = "abc", .title = "t", .artist = "a" }).isPlayable());
+    try testing.expect(!(Track{ .title = "t", .artist = "a" }).isPlayable());
+
+    try testing.expectEqualStrings("songs", Filter.songs.label());
+    try testing.expectEqualStrings("", Filter.all.params());
+    try testing.expect(Filter.albums.params().len > 0);
+
+    try testing.expect(isKindWord("Album"));
+    try testing.expect(!isKindWord("album"));
+    try testing.expect(!isKindWord("Nonsense"));
 }
+
+test "buildBodyFiltered emits valid JSON with shared context" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const plain = try buildBodyFiltered(a, "daft punk", .all);
+    const p1 = try std.json.parseFromSlice(std.json.Value, a, plain, .{});
+    try testing.expectEqualStrings("daft punk", p1.value.object.get("query").?.string);
+    try testing.expect(p1.value.object.get("params") == null);
+
+    const filtered = try buildBodyFiltered(a, "x", .songs);
+    const p2 = try std.json.parseFromSlice(std.json.Value, a, filtered, .{});
+    try testing.expect(p2.value.object.get("params") != null);
+    // context survived the const factoring
+    try testing.expectEqualStrings(
+        "WEB_REMIX",
+        p2.value.object.get("context").?.object.get("client").?.object.get("clientName").?.string,
+    );
+}
+
+test "collectTracks extracts a song from an InnerTube fixture" {
+    const json =
+        \\{"contents":[{"musicResponsiveListItemRenderer":{
+        \\  "playlistItemData":{"videoId":"abc123"},
+        \\  "flexColumns":[
+        \\    {"musicResponsiveListItemFlexColumnRenderer":{"text":{"runs":[{"text":"My Song"}]}}},
+        \\    {"musicResponsiveListItemFlexColumnRenderer":{"text":{"runs":[
+        \\      {"text":"My Artist","navigationEndpoint":{"browseEndpoint":{"browseId":"UCxyz"}}}
+        \\    ]}}}
+        \\  ]
+        \\}}]}
+    ;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const parsed = try std.json.parseFromSlice(std.json.Value, a, json, .{});
+    var out: std.ArrayList(Track) = .empty;
+    try collectTracks(a, parsed.value, &out, 10);
+
+    try testing.expectEqual(@as(usize, 1), out.items.len);
+    const t = out.items[0];
+    try testing.expectEqualStrings("My Song", t.title);
+    try testing.expectEqualStrings("My Artist", t.artist);
+    try testing.expectEqualStrings("abc123", t.video_id);
+    try testing.expect(t.isPlayable());
+}
+
 

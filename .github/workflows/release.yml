@@ -1,0 +1,84 @@
+name: release
+
+# Tag a version to build binaries and attach them to a GitHub release:
+#   git tag v0.1.1 && git push origin v0.1.1
+# POSIX program (termios, /tmp, unistd) — no native Windows yet. FreeBSD built
+# in a VM via vmactions. Binaries link libmpv dynamically; users still need
+# `mpv` + `yt-dlp` on PATH at runtime.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: macos-arm64,  os: macos-14 }
+          - { name: macos-x86_64, os: macos-13 }
+          - { name: linux-arm64,  os: ubuntu-24.04-arm }
+          - { name: linux-x86_64, os: ubuntu-24.04 }
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: install libmpv (macOS)
+        if: runner.os == 'macOS'
+        run: brew install mpv
+
+      - name: install libmpv (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libmpv-dev
+
+      - name: build (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          zig build test -Dmpv-prefix="$(brew --prefix)"
+          zig build -Doptimize=ReleaseSafe -Dmpv-prefix="$(brew --prefix)"
+
+      - name: build (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          zig build test -Dmpv-prefix=
+          zig build -Doptimize=ReleaseSafe -Dmpv-prefix=
+
+      - name: package
+        run: tar -czf "ytcli-${{ matrix.name }}.tar.gz" -C zig-out/bin ytcli
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: ytcli-${{ matrix.name }}.tar.gz
+
+  build-freebsd:
+    name: freebsd-x86_64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Runs the build inside a FreeBSD VM; the workspace (incl. zig-out) is
+      # synced back to the host afterward. pkg installs mpv into /usr/local.
+      # If pkg's zig version drifts from 0.16.0, swap to a zig tarball fetch.
+      - uses: vmactions/freebsd-vm@v1
+        with:
+          usesh: true
+          prepare: pkg install -y zig mpv
+          run: |
+            zig build test -Dmpv-prefix=/usr/local
+            zig build -Doptimize=ReleaseSafe -Dmpv-prefix=/usr/local
+
+      - name: package
+        run: tar -czf ytcli-freebsd-x86_64.tar.gz -C zig-out/bin ytcli
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: ytcli-freebsd-x86_64.tar.gz

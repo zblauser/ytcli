@@ -1,9 +1,8 @@
 const std = @import("std");
+const fsutil = @import("fsutil.zig");
 
 const c = @cImport({
     @cInclude("stdio.h");
-    @cInclude("sys/stat.h");
-    @cInclude("errno.h");
 });
 
 pub fn path(arena: std.mem.Allocator, env: *std.process.Environ.Map) ![]const u8 {
@@ -23,20 +22,9 @@ pub fn saveTheme(arena: std.mem.Allocator, file_path: []const u8, name: []const 
 }
 
 fn loadKey(arena: std.mem.Allocator, file_path: []const u8, key: []const u8) ?[]const u8 {
-    const path_z = arena.dupeZ(u8, file_path) catch return null;
-    const f = c.fopen(path_z.ptr, "rb") orelse return null;
-    defer _ = c.fclose(f);
+    const bytes = fsutil.readFileAlloc(arena, file_path) orelse return null;
 
-    _ = c.fseek(f, 0, c.SEEK_END);
-    const size = c.ftell(f);
-    if (size <= 0) return null;
-    _ = c.fseek(f, 0, c.SEEK_SET);
-
-    const buf = arena.alloc(u8, @intCast(size)) catch return null;
-    const n = c.fread(buf.ptr, 1, buf.len, f);
-    if (n == 0) return null;
-
-    var it = std.mem.splitScalar(u8, buf[0..n], '\n');
+    var it = std.mem.splitScalar(u8, bytes, '\n');
     while (it.next()) |line| {
         const trimmed = std.mem.trim(u8, line, " \t\r");
         const eq = std.mem.indexOfScalar(u8, trimmed, '=') orelse continue;
@@ -53,7 +41,7 @@ fn saveKey(arena: std.mem.Allocator, file_path: []const u8, key: []const u8, val
     var keys: std.ArrayList([]const u8) = .empty;
     var vals: std.ArrayList([]const u8) = .empty;
 
-    if (readAll(arena, file_path)) |bytes| {
+    if (fsutil.readFileAlloc(arena, file_path)) |bytes| {
         var it = std.mem.splitScalar(u8, bytes, '\n');
         while (it.next()) |line| {
             const trimmed = std.mem.trim(u8, line, " \t\r");
@@ -67,7 +55,7 @@ fn saveKey(arena: std.mem.Allocator, file_path: []const u8, key: []const u8, val
     try keys.append(arena, key);
     try vals.append(arena, value);
 
-    if (std.fs.path.dirname(file_path)) |dir| try makePathZ(arena, dir);
+    if (std.fs.path.dirname(file_path)) |dir| try fsutil.makePathZ(arena, dir);
     const path_z = try arena.dupeZ(u8, file_path);
     const f = c.fopen(path_z.ptr, "wb") orelse return error.OpenFailed;
     defer _ = c.fclose(f);
@@ -77,32 +65,3 @@ fn saveKey(arena: std.mem.Allocator, file_path: []const u8, key: []const u8, val
     }
 }
 
-fn readAll(arena: std.mem.Allocator, file_path: []const u8) ?[]const u8 {
-    const path_z = arena.dupeZ(u8, file_path) catch return null;
-    const f = c.fopen(path_z.ptr, "rb") orelse return null;
-    defer _ = c.fclose(f);
-    _ = c.fseek(f, 0, c.SEEK_END);
-    const size = c.ftell(f);
-    if (size <= 0) return null;
-    _ = c.fseek(f, 0, c.SEEK_SET);
-    const buf = arena.alloc(u8, @intCast(size)) catch return null;
-    const n = c.fread(buf.ptr, 1, buf.len, f);
-    if (n == 0) return null;
-    return buf[0..n];
-}
-
-fn makePathZ(arena: std.mem.Allocator, dir: []const u8) !void {
-    var i: usize = 0;
-    while (i < dir.len) {
-        while (i < dir.len and dir[i] == '/') : (i += 1) {}
-        const start = i;
-        while (i < dir.len and dir[i] != '/') : (i += 1) {}
-        if (i == start) break;
-        const partial = try arena.dupeZ(u8, dir[0..i]);
-        const r = c.mkdir(partial.ptr, 0o755);
-        if (r != 0) {
-            const e = std.c._errno().*;
-            if (e != c.EEXIST) return error.MkdirFailed;
-        }
-    }
-}

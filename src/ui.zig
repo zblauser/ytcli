@@ -23,6 +23,8 @@ const VIS_BARS: usize = 28;
 const TICK_MS_PLAYING: i32 = 100;
 const TICK_MS_IDLE: i32 = 250;
 
+const TYPING_STATUS = "type to search · ↑/↓ pick · ⏎ go · ^C quit";
+
 const Phase = enum { typing, results };
 
 const State = struct {
@@ -38,7 +40,7 @@ const State = struct {
     sel_track: usize = 0,
     scroll_track: usize = 0,
 
-    status: []const u8 = "type to search · ↑/↓ pick · ⏎ go · ^C quit",
+    status: []const u8 = TYPING_STATUS,
     hist: []const []const u8 = &.{},
     hist_path: []const u8 = "",
     config_path: []const u8 = "",
@@ -341,7 +343,7 @@ fn handleResults(
         .ctrl_c => return false,
         .escape => {
             state.phase = .typing;
-            state.status = "type to search · ↑/↓ pick · ⏎ go · ^C quit";
+            state.status = TYPING_STATUS;
         },
         .up => if (state.sel_track > 0) {
             state.sel_track -= 1;
@@ -351,7 +353,7 @@ fn handleResults(
         },
         .left => {
             state.phase = .typing;
-            state.status = "type to search · ↑/↓ pick · ⏎ go · ^C quit";
+            state.status = TYPING_STATUS;
         },
         .right => try activateSelected(gpa, arena, io, state),
         .page_down => state.sel_track = @min(state.sel_track + 10, max_idx),
@@ -375,7 +377,7 @@ fn handleResults(
                     },
                     'h' => {
                         state.phase = .typing;
-                        state.status = "type to search · ↑/↓ pick · ⏎ go · ^C quit";
+                        state.status = TYPING_STATUS;
                     },
                     'l' => try activateSelected(gpa, arena, io, state),
                     'g' => state.sel_track = 0,
@@ -1069,4 +1071,45 @@ fn writeAll(bytes: []const u8) !void {
         if (n <= 0) return error.WriteFailed;
         i += @intCast(n);
     }
+}
+
+const testing = std.testing;
+
+test "visibleCols counts glyphs, skipping ANSI escapes and UTF-8 continuation" {
+    try testing.expectEqual(@as(usize, 3), visibleCols("abc"));
+    try testing.expectEqual(@as(usize, 2), visibleCols("\x1b[31mab\x1b[0m"));
+    try testing.expectEqual(@as(usize, 1), visibleCols("♫")); // 3 bytes, 1 column
+    try testing.expectEqual(@as(usize, 4), visibleCols("a♫b♫"));
+}
+
+test "truncateCols cuts on column boundaries, not bytes" {
+    try testing.expectEqualStrings("abc", truncateCols("abcdef", 3));
+    try testing.expectEqualStrings("abcdef", truncateCols("abcdef", 99));
+    try testing.expectEqualStrings("", truncateCols("abc", 0));
+    try testing.expectEqualStrings("a♫", truncateCols("a♫b", 2)); // keeps whole codepoint
+}
+
+test "fmtTime formats mm:ss and clamps negatives" {
+    var buf: [16]u8 = undefined;
+    try testing.expectEqualStrings("00:05", fmtTime(&buf, 5));
+    try testing.expectEqualStrings("01:05", fmtTime(&buf, 65));
+    try testing.expectEqualStrings("10:00", fmtTime(&buf, 600));
+    try testing.expectEqualStrings("00:00", fmtTime(&buf, -3));
+}
+
+test "clampScroll keeps selection within the viewport" {
+    var s: usize = 0;
+    clampScroll(&s, 12, 50, 10); // sel below window → scroll to show it at bottom
+    try testing.expectEqual(@as(usize, 3), s);
+    clampScroll(&s, 1, 50, 10); // sel above window → scroll up to it
+    try testing.expectEqual(@as(usize, 1), s);
+    var z: usize = 5;
+    clampScroll(&z, 0, 0, 10); // empty list resets
+    try testing.expectEqual(@as(usize, 0), z);
+}
+
+test "kindShort maps known kinds and passes through unknown" {
+    try testing.expectEqualStrings("song", kindShort("Song"));
+    try testing.expectEqualStrings("ep", kindShort("Episode"));
+    try testing.expectEqualStrings("Mixtape", kindShort("Mixtape"));
 }

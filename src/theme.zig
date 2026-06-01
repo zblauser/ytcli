@@ -86,4 +86,30 @@ pub fn indexOf(name: []const u8) ?usize {
     return null;
 }
 
-pub const names = "red, cyan, mono, dracula, nord, gruvbox";
+pub const names = blk: {
+    var s: []const u8 = "";
+    for (all, 0..) |n, i| s = s ++ (if (i == 0) "" else ", ") ++ n.name;
+    break :blk s;
+};
+
+const testing = std.testing;
+
+test "byName resolves known names, aliases, and default" {
+    try testing.expectEqualStrings(red.accent, byName("red").?.accent);
+    try testing.expectEqualStrings(nord.accent, byName("nord").?.accent);
+    try testing.expectEqualStrings(red.accent, byName("yt").?.accent);
+    try testing.expectEqualStrings(red.accent, byName("youtube").?.accent);
+    try testing.expectEqualStrings(default.accent, byName("default").?.accent);
+    try testing.expect(byName("nonexistent") == null);
+}
+
+test "indexOf matches all and only declared themes" {
+    try testing.expectEqual(@as(?usize, 0), indexOf("red"));
+    try testing.expectEqual(@as(?usize, 1), indexOf("cyan"));
+    try testing.expectEqual(@as(?usize, all.len - 1), indexOf("gruvbox"));
+    try testing.expect(indexOf("yt") == null); // alias is not a declared name
+}
+
+test "names is generated from the all table" {
+    try testing.expectEqualStrings("red, cyan, mono, dracula, nord, gruvbox", names);
+}
