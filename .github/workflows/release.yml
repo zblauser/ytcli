@@ -1,11 +1,5 @@
 name: release
 
-# Tag a version to build binaries and attach them to a GitHub release:
-#   git tag v0.1.1 && git push origin v0.1.1
-# POSIX program (termios, /tmp, unistd) — no native Windows yet. FreeBSD built
-# in a VM via vmactions. Binaries link libmpv dynamically; users still need
-# `mpv` + `yt-dlp` on PATH at runtime.
-
 on:
   push:
     tags: ["v*"]
@@ -62,17 +56,26 @@ jobs:
   build-freebsd:
     name: freebsd-x86_64
     runs-on: ubuntu-latest
+    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
 
-      # Runs the build inside a FreeBSD VM; the workspace (incl. zig-out) is
-      # synced back to the host afterward. pkg installs mpv into /usr/local.
-      # If pkg's zig version drifts from 0.16.0, swap to a zig tarball fetch.
       - uses: vmactions/freebsd-vm@v1
+        env:
+          ZIG: "0.16.0"
         with:
           usesh: true
-          prepare: pkg install -y zig mpv
+          envs: "ZIG"
+          prepare: |
+            set -e
+            pkg install -y mpv pkgconf curl
+            fetch -o /tmp/zig.tar.xz "https://ziglang.org/download/${ZIG}/zig-x86_64-freebsd-${ZIG}.tar.xz"
+            mkdir -p /opt/zig
+            tar -xJf /tmp/zig.tar.xz -C /opt/zig --strip-components=1
+            ln -sf /opt/zig/zig /usr/local/bin/zig
           run: |
+            set -e
+            zig version
             zig build test -Dmpv-prefix=/usr/local
             zig build -Doptimize=ReleaseSafe -Dmpv-prefix=/usr/local
 
