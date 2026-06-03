@@ -1,8 +1,8 @@
 const std = @import("std");
 const posix = std.posix;
+
 const c = @cImport({
     @cInclude("unistd.h");
-    @cInclude("sys/ioctl.h");
 });
 
 const api = @import("api.zig");
@@ -12,6 +12,7 @@ const suggest = @import("suggest.zig");
 const history = @import("history.zig");
 const theme_mod = @import("theme.zig");
 const config = @import("config.zig");
+const log = @import("log.zig");
 
 const STDIN: posix.fd_t = 0;
 const STDOUT: posix.fd_t = 1;
@@ -75,6 +76,9 @@ pub fn run(
 ) !void {
     const orig_termios = try enterRaw();
     defer restoreTty(orig_termios);
+
+    saved_termios = orig_termios;
+    installInterruptHandlers();
 
     try writeAll("\x1b[?1049h\x1b[?25l");
     defer writeAll("\x1b[?25h\x1b[?1049l") catch {};
@@ -464,9 +468,10 @@ fn runSearch(gpa: std.mem.Allocator, io: std.Io, state: *State) !void {
     const sa = state.search_arena.allocator();
 
     const tracks = api.searchFiltered(sa, gpa, io, q_src, MAX_RESULTS, state.filter) catch |err| {
+        log.write("search failed: {s} query=\"{s}\" filter={s}", .{ @errorName(err), q_src, state.filter.label() });
         state.status = switch (err) {
             error.NoResult => "no results",
-            else => "search failed",
+            else => "search failed (see log)",
         };
         state.tracks = &.{};
         return;
@@ -510,8 +515,9 @@ fn activateSelected(gpa: std.mem.Allocator, arena: std.mem.Allocator, io: std.Io
         state.status = "loading album…";
         try draw(gpa, state);
         const sa = state.search_arena.allocator();
-        const tracks = api.browseAlbum(sa, gpa, io, t.browse_id) catch {
-            state.status = "album load failed";
+        const tracks = api.browseAlbum(sa, gpa, io, t.browse_id) catch |err| {
+            log.write("album load failed: {s} browse_id={s} title=\"{s}\"", .{ @errorName(err), t.browse_id, t.title });
+            state.status = "album load failed (see log)";
             return;
         };
         state.tracks = tracks;
@@ -539,8 +545,9 @@ fn playQueueCurrent(gpa: std.mem.Allocator, arena: std.mem.Allocator, io: std.Io
     state.status = "resolving stream…";
     try draw(gpa, state);
 
-    const url = stream.resolveAudioUrl(gpa, io, t.video_id) catch {
-        state.status = "yt-dlp failed";
+    const url = stream.resolveAudioUrl(gpa, io, t.video_id) catch |err| {
+        log.write("stream resolve failed: {s} video_id={s} title=\"{s}\"", .{ @errorName(err), t.video_id, t.title });
+        state.status = "yt-dlp failed (see log)";
         return;
     };
     defer gpa.free(url);
@@ -648,11 +655,12 @@ fn truncateCols(s: []const u8, max_cols: usize) []const u8 {
 
 
 fn termSize() struct { cols: usize, rows: usize } {
-    var ws: c.winsize = undefined;
-    if (c.ioctl(STDOUT, c.TIOCGWINSZ, &ws) == 0 and ws.ws_col > 0) {
+    var ws: posix.winsize = undefined;
+    const req: c_int = @bitCast(@as(c_uint, @intCast(std.c.T.IOCGWINSZ)));
+    if (std.c.ioctl(STDOUT, req, &ws) == 0 and ws.col > 0) {
         return .{
-            .cols = @intCast(ws.ws_col),
-            .rows = if (ws.ws_row > 0) @intCast(ws.ws_row) else 24,
+            .cols = @intCast(ws.col),
+            .rows = if (ws.row > 0) @intCast(ws.row) else 24,
         };
     }
     return .{ .cols = 80, .rows = 24 };
@@ -1046,6 +1054,25 @@ fn fmtTime(buf: []u8, secs: f64) []const u8 {
 }
 
 
+var saved_termios: ?posix.termios = null;
+
+fn onInterrupt(_: posix.SIG) callconv(.c) void {
+    const restore = "\x1b[?25h\x1b[?1049l";
+    _ = c.write(STDOUT, restore, restore.len);
+    if (saved_termios) |t| posix.tcsetattr(STDIN, .NOW, t) catch {};
+    c._exit(130);
+}
+
+fn installInterruptHandlers() void {
+    const act = posix.Sigaction{
+        .handler = .{ .handler = onInterrupt },
+        .mask = posix.sigemptyset(),
+        .flags = 0,
+    };
+    posix.sigaction(posix.SIG.INT, &act, null);
+    posix.sigaction(posix.SIG.TERM, &act, null);
+}
+
 fn enterRaw() !posix.termios {
     const orig = try posix.tcgetattr(STDIN);
     var raw = orig;
@@ -1078,7 +1105,7 @@ const testing = std.testing;
 test "visibleCols counts glyphs, skipping ANSI escapes and UTF-8 continuation" {
     try testing.expectEqual(@as(usize, 3), visibleCols("abc"));
     try testing.expectEqual(@as(usize, 2), visibleCols("\x1b[31mab\x1b[0m"));
-    try testing.expectEqual(@as(usize, 1), visibleCols("♫")); // 3 bytes, 1 column
+    try testing.expectEqual(@as(usize, 1), visibleCols("♫"));
     try testing.expectEqual(@as(usize, 4), visibleCols("a♫b♫"));
 }
 
@@ -1086,7 +1113,7 @@ test "truncateCols cuts on column boundaries, not bytes" {
     try testing.expectEqualStrings("abc", truncateCols("abcdef", 3));
     try testing.expectEqualStrings("abcdef", truncateCols("abcdef", 99));
     try testing.expectEqualStrings("", truncateCols("abc", 0));
-    try testing.expectEqualStrings("a♫", truncateCols("a♫b", 2)); // keeps whole codepoint
+    try testing.expectEqualStrings("a♫", truncateCols("a♫b", 2)); 
 }
 
 test "fmtTime formats mm:ss and clamps negatives" {
@@ -1099,12 +1126,12 @@ test "fmtTime formats mm:ss and clamps negatives" {
 
 test "clampScroll keeps selection within the viewport" {
     var s: usize = 0;
-    clampScroll(&s, 12, 50, 10); // sel below window → scroll to show it at bottom
+    clampScroll(&s, 12, 50, 10);
     try testing.expectEqual(@as(usize, 3), s);
-    clampScroll(&s, 1, 50, 10); // sel above window → scroll up to it
+    clampScroll(&s, 1, 50, 10);
     try testing.expectEqual(@as(usize, 1), s);
     var z: usize = 5;
-    clampScroll(&z, 0, 0, 10); // empty list resets
+    clampScroll(&z, 0, 0, 10);
     try testing.expectEqual(@as(usize, 0), z);
 }
 

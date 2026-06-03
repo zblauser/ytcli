@@ -6,6 +6,7 @@ const ui = @import("ui.zig");
 const history = @import("history.zig");
 const theme_mod = @import("theme.zig");
 const config = @import("config.zig");
+const log = @import("log.zig");
 
 const c = @cImport({
     @cInclude("unistd.h");
@@ -26,6 +27,8 @@ pub fn main(init: std.process.Init) !void {
     const gpa = init.gpa;
     const io = init.io;
     const arena = init.arena.allocator();
+
+    log.init(arena, init.environ_map);
 
     const raw_args = try init.minimal.args.toSlice(arena);
 

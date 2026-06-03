@@ -1,4 +1,5 @@
 const std = @import("std");
+const log = @import("log.zig");
 
 pub const Error = error{ProcFailed} || std.process.RunError;
 
@@ -8,10 +9,15 @@ pub fn runCapture(gpa: std.mem.Allocator, io: std.Io, argv: []const []const u8) 
     errdefer gpa.free(result.stdout);
     switch (result.term) {
         .exited => |code| if (code != 0) {
-            std.debug.print("{s} exit {d}: {s}\n", .{ argv[0], code, result.stderr });
+            
+			const err = std.mem.trim(u8, result.stderr, " \r\n\t");
+            log.write("{s} exit {d}: {s}", .{ argv[0], code, err[0..@min(err.len, 400)] });
             return error.ProcFailed;
         },
-        else => return error.ProcFailed,
+        else => {
+            log.write("{s} terminated abnormally", .{argv[0]});
+            return error.ProcFailed;
+        },
     }
     return result.stdout;
 }

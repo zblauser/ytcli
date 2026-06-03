@@ -1,15 +1,11 @@
 const std = @import("std");
 
-// Single source of truth for the version: the package manifest.
 const version = @import("build.zig.zon").version;
 
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // libmpv install prefix. Default /usr/local (Intel Homebrew). Override for
-    // arm Homebrew (-Dmpv-prefix=/opt/homebrew); pass empty (-Dmpv-prefix=) on
-    // Linux to skip manual paths and let pkg-config resolve libmpv-dev.
     const mpv_prefix = b.option([]const u8, "mpv-prefix", "libmpv install prefix (default /usr/local)") orelse "/usr/local";
 
     const mod = b.createModule(.{

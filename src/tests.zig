@@ -8,4 +8,5 @@ test {
     _ = @import("fsutil.zig");
     _ = @import("api.zig");
     _ = @import("ui.zig");
+    _ = @import("log.zig");
 }

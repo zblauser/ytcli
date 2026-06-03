@@ -18,12 +18,19 @@ zig 0.16, single binary
 - astats lavfi filter for visualizer via `ffmpeg`
 
 ## version
-<b>v0.1.1</b>
-+ github actions for release builds
-+ prebuilt binaries: macOS, linux, freeBSD
-+ hardened temp writes (mkstemp, 0600)
+<b>v0.1.2</b>
++ failures log to `~/.local/share/ytcli/log` (timestamp + cause)
++ ctrl+c restores cleanly to terminal in all cases
++ play video ids beginning with `-` (yt-dlp `--` arg fix)
++ fix freeBSD build (terminal size via std, not `<sys/ioctl.h>`)
++ readme fix: `brew install mpv` already pulls in `yt-dlp`, `libmpv-dev` however does not
 <details>
 <summary>previous</summary><br>
+
+<b>v0.1.1</b><br>
++ github actions for release builds<br>
++ prebuilt binaries: macOS, linux, freeBSD<br>
++ hardened temp writes (mkstemp, 0600)
 
 <b>v0.1</b><br>
 + autoplays through result list
@@ -40,7 +47,7 @@ zig build install --prefix ~/.local    # → ~/.local/bin/ytcli
 
 ```sh
 install ex.
-brew install mpv yt-dlp ffmpeg         # macOS
+brew install mpv ffmpeg                # macOS (mpv pulls in yt-dlp)
 apt install libmpv-dev yt-dlp ffmpeg   # Debian/Ubuntu
 ```
 <br>
@@ -49,7 +56,7 @@ apt install libmpv-dev yt-dlp ffmpeg   # Debian/Ubuntu
 
 ## releases
 
-macOS, Linux, and FreeBSD binaries are attached to each [release](../../releases). Windows: run under WSL (native build is a later phase).
+macOS, Linux, and FreeBSD binaries are attached to each [release](../../releases). windows: run under WSL (no native build currently).
 
 ## run
 ```sh
@@ -94,6 +101,7 @@ made an effort to use commands that felt intuitive
 
 ## storage/config
 - `$XDG_DATA_HOME/ytcli/history` - query log (falls back to `~/.local/share/ytcli/history`).
+- `$XDG_DATA_HOME/ytcli/log` - timestamped failures (search/album/stream) with the underlying error and any `curl`/`yt-dlp` stderr. check here first when something says `(see log)`.
 - `$XDG_CONFIG_HOME/ytcli/config` - `key=value` settings.
 
 history is just newline-delimited text - `grep`/`cat` it, or seed it so the TUI autocompletes your favorites from the first keystroke:

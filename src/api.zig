@@ -301,9 +301,6 @@ fn buildBodyFiltered(arena: std.mem.Allocator, query: []const u8, filter: Filter
     return std.fmt.allocPrint(arena, "{{{s},\"query\":{s},\"params\":\"{s}\"}}", .{ CLIENT_CONTEXT, escaped, params });
 }
 
-// Writes `body` to a freshly created temp file (random name, mode 0600 via
-// mkstemp) and returns its path. Avoids the predictable-path symlink/clobber
-// race of a fixed /tmp filename. Caller is responsible for unlinking.
 fn writeTempFile(arena: std.mem.Allocator, body: []const u8) ![:0]const u8 {
     const path = try arena.dupeZ(u8, TMP_TEMPLATE);
     const fd = c.mkstemp(path.ptr);
@@ -346,8 +343,8 @@ test "buildBodyFiltered emits valid JSON with shared context" {
     const filtered = try buildBodyFiltered(a, "x", .songs);
     const p2 = try std.json.parseFromSlice(std.json.Value, a, filtered, .{});
     try testing.expect(p2.value.object.get("params") != null);
-    // context survived the const factoring
-    try testing.expectEqualStrings(
+    
+	try testing.expectEqualStrings(
         "WEB_REMIX",
         p2.value.object.get("context").?.object.get("client").?.object.get("clientName").?.string,
     );
