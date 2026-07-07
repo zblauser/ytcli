@@ -222,6 +222,17 @@ fn runHasNav(v: std.json.Value) bool {
     return nav == .object;
 }
 
+fn browseIdOfRun(v: std.json.Value) ?[]const u8 {
+    if (v != .object) return null;
+    const nav = v.object.get("navigationEndpoint") orelse return null;
+    if (nav != .object) return null;
+    const be = nav.object.get("browseEndpoint") orelse return null;
+    if (be != .object) return null;
+    const bid = be.object.get("browseId") orelse return null;
+    if (bid != .string) return null;
+    return bid.string;
+}
+
 fn firstLinkedRunText(runs: []std.json.Value) ?[]const u8 {
     for (runs) |run| {
         if (runHasNav(run)) {
@@ -238,32 +249,55 @@ fn positionalArtist(runs: []std.json.Value) ?[]const u8 {
 }
 
 fn findAlbumArtist(v: std.json.Value) ?[]const u8 {
+    const hdr = findHeaderRenderer(v) orelse return null;
+    return artistFromHeader(hdr);
+}
+
+fn findHeaderRenderer(v: std.json.Value) ?std.json.Value {
     switch (v) {
         .object => |obj| {
-            if (obj.get("navigationEndpoint")) |nav| {
-                if (nav == .object) {
-                    if (nav.object.get("browseEndpoint")) |be| {
-                        if (be == .object) {
-                            if (be.object.get("browseId")) |bid| {
-                                if (bid == .string and std.mem.startsWith(u8, bid.string, "UC")) {
-                                    if (textOfRun(v)) |t| return t;
+            if (obj.get("musicResponsiveHeaderRenderer")) |h| return h;
+            if (obj.get("musicDetailHeaderRenderer")) |h| return h;
+            var it = obj.iterator();
+            while (it.next()) |entry| {
+                if (findHeaderRenderer(entry.value_ptr.*)) |h| return h;
+            }
+        },
+        .array => |arr| {
+            for (arr.items) |item| if (findHeaderRenderer(item)) |h| return h;
+        },
+        else => {},
+    }
+    return null;
+}
+
+fn artistFromHeader(hdr: std.json.Value) ?[]const u8 {
+    if (hdr != .object) return null;
+    inline for (.{ "straplineTextOne", "subtitle" }) |key| {
+        if (hdr.object.get(key)) |node| {
+            if (node == .object) {
+                if (node.object.get("runs")) |runs| {
+                    if (runs == .array) {
+                        for (runs.array.items) |run| {
+                            if (browseIdOfRun(run)) |bid| {
+                                if (std.mem.startsWith(u8, bid, "UC")) {
+                                    if (textOfRun(run)) |t| return t;
                                 }
                             }
                         }
                     }
                 }
             }
-            var it = obj.iterator();
-            while (it.next()) |entry| {
-                if (findAlbumArtist(entry.value_ptr.*)) |a| return a;
+        }
+    }
+    if (hdr.object.get("straplineTextOne")) |node| {
+        if (node == .object) {
+            if (node.object.get("runs")) |runs| {
+                if (runs == .array and runs.array.items.len > 0) {
+                    return textOfRun(runs.array.items[0]);
+                }
             }
-        },
-        .array => |arr| {
-            for (arr.items) |item| {
-                if (findAlbumArtist(item)) |a| return a;
-            }
-        },
-        else => {},
+        }
     }
     return null;
 }
@@ -376,6 +410,50 @@ test "collectTracks extracts a song from an InnerTube fixture" {
     try testing.expectEqualStrings("My Artist", t.artist);
     try testing.expectEqualStrings("abc123", t.video_id);
     try testing.expect(t.isPlayable());
+}
+
+test "findAlbumArtist reads the header, not a related-artist carousel" {
+    // "contents" (with a Dead Can Dance related link) precedes "header" in the
+    // JSON exactly as YTM serves it — the old global scan returned the carousel.
+    const json =
+        \\{"contents":{"sectionListRenderer":{"contents":[
+        \\  {"musicCarouselShelfRenderer":{"contents":[
+        \\    {"musicTwoRowItemRenderer":{"title":{"runs":[
+        \\      {"text":"Dead Can Dance","navigationEndpoint":{"browseEndpoint":{"browseId":"UCdead"}}}
+        \\    ]}}}
+        \\  ]}}
+        \\]}},
+        \\"header":{"musicResponsiveHeaderRenderer":{"straplineTextOne":{"runs":[
+        \\  {"text":"Bohren & der Club of Gore","navigationEndpoint":{"browseEndpoint":{"browseId":"UCbohren"}}}
+        \\]}}}}
+    ;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const parsed = try std.json.parseFromSlice(std.json.Value, a, json, .{});
+    try testing.expectEqualStrings(
+        "Bohren & der Club of Gore",
+        findAlbumArtist(parsed.value).?,
+    );
+}
+
+test "findAlbumArtist reads legacy musicDetailHeaderRenderer subtitle" {
+    const json =
+        \\{"header":{"musicDetailHeaderRenderer":{"subtitle":{"runs":[
+        \\  {"text":"Bohren & der Club of Gore","navigationEndpoint":{"browseEndpoint":{"browseId":"UCbohren"}}},
+        \\  {"text":" • "},{"text":"Album"},{"text":" • "},{"text":"2002"}
+        \\]}}}}
+    ;
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+
+    const parsed = try std.json.parseFromSlice(std.json.Value, a, json, .{});
+    try testing.expectEqualStrings(
+        "Bohren & der Club of Gore",
+        findAlbumArtist(parsed.value).?,
+    );
 }
 
 

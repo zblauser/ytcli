@@ -3,8 +3,13 @@ const fsutil = @import("fsutil.zig");
 
 const c = @cImport({
     @cInclude("stdio.h");
-    @cInclude("time.h");
 });
+
+const time_t = std.c.time_t;
+const Tm = opaque {};
+extern "c" fn time(?*time_t) time_t;
+extern "c" fn localtime(*const time_t) ?*Tm;
+extern "c" fn strftime(noalias [*]u8, usize, noalias [*:0]const u8, noalias *const Tm) usize;
 
 // Resolved once at startup via init(); null leaves logging a no-op so callers
 // never have to care whether a log file is available.
@@ -48,9 +53,9 @@ pub fn write(comptime fmt: []const u8, args: anytype) void {
 
 // "YYYY-MM-DD HH:MM:SS" in local time via libc; returns the filled slice.
 fn stamp(out: *[20]u8) []const u8 {
-    const t = c.time(null);
-    const tm = c.localtime(&t) orelse return "";
-    const n = c.strftime(out, out.len, "%Y-%m-%d %H:%M:%S", tm);
+    const t = time(null);
+    const tm = localtime(&t) orelse return "";
+    const n = strftime(out, out.len, "%Y-%m-%d %H:%M:%S", tm);
     return out[0..n];
 }
 

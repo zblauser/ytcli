@@ -52,6 +52,7 @@ const State = struct {
     queue: []api.Track = &.{},
     queue_idx: usize = 0,
     now_track: ?api.Track = null,
+    connecting: bool = false,
 
     tick: u64 = 0,
 
@@ -542,19 +543,25 @@ fn cloneTrack(a: std.mem.Allocator, t: api.Track) !api.Track {
 fn playQueueCurrent(gpa: std.mem.Allocator, arena: std.mem.Allocator, io: std.Io, state: *State) !void {
     if (state.queue.len == 0 or state.queue_idx >= state.queue.len) return;
     const t = state.queue[state.queue_idx];
-    state.status = "resolving stream…";
+
+    const p = try ensurePlayer(gpa, state);
+    p.stop();
+    state.now_track = t;
+    state.connecting = true;
+    state.status = "connecting to YouTube…";
     try draw(gpa, state);
 
     const url = stream.resolveAudioUrl(gpa, io, t.video_id) catch |err| {
         log.write("stream resolve failed: {s} video_id={s} title=\"{s}\"", .{ @errorName(err), t.video_id, t.title });
+        state.now_track = null;
+        state.connecting = false;
         state.status = "yt-dlp failed (see log)";
         return;
     };
     defer gpa.free(url);
 
-    const p = try ensurePlayer(gpa, state);
     try p.loadUrl(arena, url);
-    state.now_track = t;
+    state.connecting = false;
     state.status = "playing";
 }
 
@@ -913,9 +920,10 @@ const BAR_CHARS = [_][]const u8{ " ", "▁", "▂", "▃", "▄", "▅", "▆", 
 fn drawNowPlaying(w: *std.Io.Writer, th: theme_mod.Theme, inner: usize, state: *State) !void {
     const t = state.now_track.?;
     const pl = state.pl orelse return;
+    const connecting = state.connecting;
     const paused = pl.isPaused();
 
-    const label = if (paused) " ⏸ paused " else " ▶ playing ";
+    const label = if (connecting) " ⟳ connecting… " else if (paused) " ⏸ paused " else " ▶ playing ";
     try w.print("{s}╭─{s}{s}{s}", .{ th.accent, th.accent_strong, label, th.reset });
     try w.writeAll(th.accent);
     var i: usize = 0;
@@ -976,8 +984,9 @@ fn drawNowPlaying(w: *std.Io.Writer, th: theme_mod.Theme, inner: usize, state: *
     {
         try w.print("{s}│{s} ", .{ th.accent, th.reset });
         const room = inner -| 1;
-        const rms = if (paused) 0 else pl.rmsLevel();
-        try drawBars(w, th, room, state.tick, paused, rms);
+        const idle = paused or connecting;
+        const rms = if (idle) 0 else pl.rmsLevel();
+        try drawBars(w, th, room, state.tick, idle, rms);
         try w.print("{s}│{s}\r\n", .{ th.accent, th.reset });
     }
 
