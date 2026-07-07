@@ -18,14 +18,20 @@ zig 0.16, single binary
 - astats lavfi filter for visualizer via `ffmpeg`
 
 ## version
-<b>v0.1.2</b>
-+ failures log to `~/.local/share/ytcli/log` (timestamp + cause)
-+ ctrl+c restores cleanly to terminal in all cases
-+ play video ids beginning with `-` (yt-dlp `--` arg fix)
-+ fix freeBSD build (terminal size via std, not `<sys/ioctl.h>`)
-+ readme fix: `brew install mpv` already pulls in `yt-dlp`, `libmpv-dev` however does not
+<b>v0.1.3</b>
++ selecting a track stops audio immediately + shows `connecting to YouTube…` in the now-playing footer
++ fix album view mislabeling tracks with a related artist (reads album header, not first channel link)
++ fix freeBSD build (timestamp via `extern` fns, not `<time.h>` → `<sys/time.h>` translate-c)
++ release CI fails fast on stalled runners (`timeout-minutes`)
 <details>
 <summary>previous</summary><br>
+
+<b>v0.1.2</b><br>
++ failures log to `~/.local/share/ytcli/log` (timestamp + cause)<br>
++ ctrl+c restores cleanly to terminal in all cases<br>
++ play video ids beginning with `-` (yt-dlp `--` arg fix)<br>
++ fix freeBSD build (terminal size via std, not `<sys/ioctl.h>`)<br>
++ readme fix: `brew install mpv` already pulls in `yt-dlp`, `libmpv-dev` however does not
 
 <b>v0.1.1</b><br>
 + github actions for release builds<br>
