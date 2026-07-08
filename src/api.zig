@@ -16,6 +16,7 @@ const CLIENT_CONTEXT =
 ;
 
 const c = @cImport({
+    @cDefine("_FORTIFY_SOURCE", "0");
     @cInclude("stdlib.h");
     @cInclude("unistd.h");
 });

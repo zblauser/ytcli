@@ -1,6 +1,9 @@
 const std = @import("std");
 
 const c = @cImport({
+    // zig defines _FORTIFY_SOURCE=2 in optimized builds; FreeBSD's ssp
+    // (__ssp) inline wrappers then break translate-c. Disable them.
+    @cDefine("_FORTIFY_SOURCE", "0");
     @cInclude("stdio.h");
     @cInclude("stdlib.h");
     @cInclude("errno.h");

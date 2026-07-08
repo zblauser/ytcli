@@ -21,8 +21,9 @@ zig 0.16, single binary
 <b>v0.1.3</b>
 + selecting a track stops audio immediately + shows `connecting to YouTube…` in the now-playing footer
 + fix album view mislabeling tracks with a related artist (reads album header, not first channel link)
-+ fix freeBSD build (drop `<time.h>` + `<sys/stat.h>` cimports that drag in `<sys/time.h>`; use `extern`/`std.c`)
-+ release CI fails fast on stalled runners (`timeout-minutes`)
++ fix freeBSD release build (zig 0.16 translate-c: headers pulling `<sys/time.h>`, and `__ssp` fortify wrappers → `std.c` + `_FORTIFY_SOURCE=0`)
++ macOS release is now one universal binary (arm64 + x86_64), cross-built + `lipo`'d on a single runner — no more scarce Intel-runner queue
++ release CI `timeout-minutes` (fail fast instead of 24h runner-await hangs)
 <details>
 <summary>previous</summary><br>
 
@@ -62,7 +63,7 @@ apt install libmpv-dev yt-dlp ffmpeg   # Debian/Ubuntu
 
 ## releases
 
-macOS, Linux, and FreeBSD binaries are attached to each [release](../../releases). windows: run under WSL (no native build currently).
+macOS (universal: arm64 + x86_64), Linux (arm64/x86_64), and FreeBSD binaries are attached to each [release](../../releases). windows: run under WSL (no native build currently).
 
 ## run
 ```sh

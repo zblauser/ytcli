@@ -2,6 +2,7 @@ const std = @import("std");
 const fsutil = @import("fsutil.zig");
 
 const c = @cImport({
+    @cDefine("_FORTIFY_SOURCE", "0");
     @cInclude("stdio.h");
 });
 

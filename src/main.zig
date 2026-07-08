@@ -9,6 +9,7 @@ const config = @import("config.zig");
 const log = @import("log.zig");
 
 const c = @cImport({
+    @cDefine("_FORTIFY_SOURCE", "0");
     @cInclude("unistd.h");
 });
 

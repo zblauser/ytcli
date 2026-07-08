@@ -8,7 +8,7 @@ permissions:
   contents: write
 
 jobs:
-  build:
+  build-linux:
     name: ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
@@ -16,8 +16,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { name: macos-arm64,  os: macos-14 }
-          - { name: macos-x86_64, os: macos-13 }
           - { name: linux-arm64,  os: ubuntu-24.04-arm }
           - { name: linux-x86_64, os: ubuntu-24.04 }
     steps:
@@ -27,22 +25,10 @@ jobs:
         with:
           version: 0.16.0
 
-      - name: install libmpv (macOS)
-        if: runner.os == 'macOS'
-        run: brew install mpv
-
-      - name: install libmpv (Linux)
-        if: runner.os == 'Linux'
+      - name: install libmpv
         run: sudo apt-get update && sudo apt-get install -y libmpv-dev
 
-      - name: build (macOS)
-        if: runner.os == 'macOS'
-        run: |
-          zig build test -Dmpv-prefix="$(brew --prefix)"
-          zig build -Doptimize=ReleaseSafe -Dmpv-prefix="$(brew --prefix)"
-
-      - name: build (Linux)
-        if: runner.os == 'Linux'
+      - name: build
         run: |
           zig build test -Dmpv-prefix=
           zig build -Doptimize=ReleaseSafe -Dmpv-prefix=
@@ -53,6 +39,46 @@ jobs:
       - uses: softprops/action-gh-release@v2
         with:
           files: ytcli-${{ matrix.name }}.tar.gz
+
+  # Single universal (arm64 + x86_64) binary, cross-built on one Apple-silicon
+  # runner and lipo'd — avoids the scarce macos-13 Intel runner entirely.
+  build-macos:
+    name: macos-universal
+    runs-on: macos-14
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: install libmpv (arm64, native)
+        run: brew install mpv
+
+      - name: install libmpv (x86_64, via Rosetta homebrew)
+        run: |
+          sudo softwareupdate --install-rosetta --agree-to-license
+          arch -x86_64 /usr/bin/env NONINTERACTIVE=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+          arch -x86_64 /usr/local/bin/brew install mpv
+
+      - name: build both slices + lipo
+        run: |
+          zig build test -Dmpv-prefix="$(brew --prefix)"
+          zig build -Doptimize=ReleaseSafe -Dtarget=aarch64-macos -Dmpv-prefix=/opt/homebrew
+          cp zig-out/bin/ytcli ytcli-arm64
+          zig build -Doptimize=ReleaseSafe -Dtarget=x86_64-macos -Dmpv-prefix=/usr/local
+          cp zig-out/bin/ytcli ytcli-x86_64
+          lipo -create -output ytcli ytcli-arm64 ytcli-x86_64
+          lipo -info ytcli
+          file ytcli
+
+      - name: package
+        run: tar -czf ytcli-macos-universal.tar.gz ytcli
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: ytcli-macos-universal.tar.gz
 
   build-freebsd:
     name: freebsd-x86_64

@@ -2,6 +2,7 @@ const std = @import("std");
 const posix = std.posix;
 
 const c = @cImport({
+    @cDefine("_FORTIFY_SOURCE", "0");
     @cInclude("unistd.h");
 });
 
