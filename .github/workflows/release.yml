@@ -60,14 +60,20 @@ jobs:
         run: |
           sudo softwareupdate --install-rosetta --agree-to-license
           arch -x86_64 /usr/bin/env NONINTERACTIVE=1 bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
-          arch -x86_64 /usr/local/bin/brew install mpv
+          # mpv's python@3.14 dep can fail to symlink into /usr/local/bin against
+          # the runner's preinstalled Python.framework — harmless, we only need
+          # libmpv, reached via the formula's opt prefix (not global links).
+          arch -x86_64 /usr/local/bin/brew install mpv || true
+          test -f "$(arch -x86_64 /usr/local/bin/brew --prefix mpv)/lib/libmpv.dylib"
 
       - name: build both slices + lipo
         run: |
-          zig build test -Dmpv-prefix="$(brew --prefix)"
-          zig build -Doptimize=ReleaseSafe -Dtarget=aarch64-macos -Dmpv-prefix=/opt/homebrew
+          ARM_MPV="$(brew --prefix mpv)"
+          X86_MPV="$(arch -x86_64 /usr/local/bin/brew --prefix mpv)"
+          zig build test -Dmpv-prefix="$ARM_MPV"
+          zig build -Doptimize=ReleaseSafe -Dtarget=aarch64-macos -Dmpv-prefix="$ARM_MPV"
           cp zig-out/bin/ytcli ytcli-arm64
-          zig build -Doptimize=ReleaseSafe -Dtarget=x86_64-macos -Dmpv-prefix=/usr/local
+          zig build -Doptimize=ReleaseSafe -Dtarget=x86_64-macos -Dmpv-prefix="$X86_MPV"
           cp zig-out/bin/ytcli ytcli-x86_64
           lipo -create -output ytcli ytcli-arm64 ytcli-x86_64
           lipo -info ytcli
