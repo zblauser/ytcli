@@ -19,7 +19,7 @@ jobs:
           - { name: linux-arm64,  os: ubuntu-24.04-arm }
           - { name: linux-x86_64, os: ubuntu-24.04 }
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: mlugg/setup-zig@v2
         with:
@@ -36,7 +36,7 @@ jobs:
       - name: package
         run: tar -czf "ytcli-${{ matrix.name }}.tar.gz" -C zig-out/bin ytcli
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: ytcli-${{ matrix.name }}.tar.gz
 
@@ -47,7 +47,7 @@ jobs:
     runs-on: macos-14
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: mlugg/setup-zig@v2
         with:
@@ -82,7 +82,7 @@ jobs:
       - name: package
         run: tar -czf ytcli-macos-universal.tar.gz ytcli
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: ytcli-macos-universal.tar.gz
 
@@ -92,7 +92,7 @@ jobs:
     timeout-minutes: 30
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - uses: vmactions/freebsd-vm@v1
         env:
@@ -116,6 +116,6 @@ jobs:
       - name: package
         run: tar -czf ytcli-freebsd-x86_64.tar.gz -C zig-out/bin ytcli
 
-      - uses: softprops/action-gh-release@v2
+      - uses: softprops/action-gh-release@v3
         with:
           files: ytcli-freebsd-x86_64.tar.gz

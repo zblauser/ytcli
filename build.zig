@@ -50,8 +50,14 @@ pub fn build(b: *std.Build) void {
 
 fn linkMpv(b: *std.Build, mod: *std.Build.Module, prefix: []const u8) void {
     if (prefix.len > 0) {
+        // Explicit prefix wins: skip pkg-config, which resolves to the HOST
+        // arch's mpv and breaks cross-compiles (e.g. the x86_64 slice of the
+        // universal macOS build linking the arm libmpv). Empty prefix (Linux)
+        // still uses pkg-config to find the system libmpv.
         mod.addIncludePath(.{ .cwd_relative = b.fmt("{s}/include", .{prefix}) });
         mod.addLibraryPath(.{ .cwd_relative = b.fmt("{s}/lib", .{prefix}) });
+        mod.linkSystemLibrary("mpv", .{ .use_pkg_config = .no });
+    } else {
+        mod.linkSystemLibrary("mpv", .{});
     }
-    mod.linkSystemLibrary("mpv", .{});
 }
