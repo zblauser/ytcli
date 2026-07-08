@@ -21,7 +21,7 @@ zig 0.16, single binary
 <b>v0.1.3</b>
 + selecting a track stops audio immediately + shows `connecting to YouTube…` in the now-playing footer
 + fix album view mislabeling tracks with a related artist (reads album header, not first channel link)
-+ fix freeBSD build (timestamp via `extern` fns, not `<time.h>` → `<sys/time.h>` translate-c)
++ fix freeBSD build (drop `<time.h>` + `<sys/stat.h>` cimports that drag in `<sys/time.h>`; use `extern`/`std.c`)
 + release CI fails fast on stalled runners (`timeout-minutes`)
 <details>
 <summary>previous</summary><br>

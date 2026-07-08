@@ -3,7 +3,6 @@ const std = @import("std");
 const c = @cImport({
     @cInclude("stdio.h");
     @cInclude("stdlib.h");
-    @cInclude("sys/stat.h");
     @cInclude("errno.h");
     @cInclude("unistd.h");
 });
@@ -32,7 +31,7 @@ pub fn makePathZ(arena: std.mem.Allocator, dir: []const u8) !void {
         while (i < dir.len and dir[i] != '/') : (i += 1) {}
         if (i == start) break;
         const partial = try arena.dupeZ(u8, dir[0..i]);
-        const r = c.mkdir(partial.ptr, 0o755);
+        const r = std.c.mkdir(partial.ptr, 0o755);
         if (r != 0) {
             const e = std.c._errno().*;
             if (e != c.EEXIST) return error.MkdirFailed;
