@@ -68,6 +68,20 @@ pub const Player = struct {
         return pause != 0;
     }
 
+    pub fn toggleMute(self: *Player) bool {
+        var m: c_int = 0;
+        _ = c.mpv_get_property(self.handle, "mute", c.MPV_FORMAT_FLAG, &m);
+        var new: c_int = if (m != 0) 0 else 1;
+        _ = c.mpv_set_property(self.handle, "mute", c.MPV_FORMAT_FLAG, &new);
+        return new != 0;
+    }
+
+    pub fn isMuted(self: *Player) bool {
+        var m: c_int = 0;
+        _ = c.mpv_get_property(self.handle, "mute", c.MPV_FORMAT_FLAG, &m);
+        return m != 0;
+    }
+
     pub fn seekRelative(self: *Player, seconds: f64) void {
         var buf: [32]u8 = undefined;
         const s = std.fmt.bufPrintZ(&buf, "{d}", .{seconds}) catch return;

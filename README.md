@@ -18,14 +18,20 @@ zig 0.16, single binary
 - astats lavfi filter for visualizer via `ffmpeg`
 
 ## version
-<b>v0.1.3</b>
-+ selecting a track stops audio immediately + shows `connecting to YouTube…` in the now-playing footer
-+ fix album view mislabeling tracks with a related artist (reads album header, not first channel link)
-+ fix freeBSD release build (zig 0.16 translate-c: headers pulling `<sys/time.h>`, and `__ssp` fortify wrappers → `std.c` + `_FORTIFY_SOURCE=0`)
-+ macOS release is now one universal binary (arm64 + x86_64), cross-built + `lipo`'d on a single runner — no more scarce Intel-runner queue
-+ release CI `timeout-minutes` (fail fast instead of 24h runner-await hangs)
+<b>v0.1.4</b>
++ `m` mute toggle (now-playing meter reads `mute`, visualizer idles while muted)
++ `Ctrl+R` repeat mode: off → track → queue (autoplay loops per mode)
++ volume persists across sessions (saved to config alongside theme)
++ tracks over an hour render `h:mm:ss`
 <details>
 <summary>previous</summary><br>
+
+<b>v0.1.3</b><br>
++ selecting a track stops audio immediately + shows `connecting to YouTube…` in the now-playing footer<br>
++ fix album view mislabeling tracks with a related artist (reads album header, not first channel link)<br>
++ fix freeBSD release build (zig 0.16 translate-c: headers pulling `<sys/time.h>`, and `__ssp` fortify wrappers → `std.c` + `_FORTIFY_SOURCE=0`)<br>
++ macOS release is now one universal binary (arm64 + x86_64), cross-built + `lipo`'d on a single runner — no more scarce Intel-runner queue<br>
++ release CI `timeout-minutes` (fail fast instead of 24h runner-await hangs)
 
 <b>v0.1.2</b><br>
 + failures log to `~/.local/share/ytcli/log` (timestamp + cause)<br>
@@ -102,7 +108,9 @@ made an effort to use commands that felt intuitive
 - `Ctrl+S` stop
 - `[`/`]` seek ±10s
 - `{`/`}` ±60s
-- `-`/`=` volume ±5
+- `-`/`=` volume ±5 (persists)
+- `m` mute
+- `Ctrl+R` repeat (off/track/queue)
 - `Ctrl+Y` theme
 </details>
 

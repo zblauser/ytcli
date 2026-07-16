@@ -22,7 +22,7 @@ pub fn saveTheme(arena: std.mem.Allocator, file_path: []const u8, name: []const 
     saveKey(arena, file_path, "theme", name) catch {};
 }
 
-fn loadKey(arena: std.mem.Allocator, file_path: []const u8, key: []const u8) ?[]const u8 {
+pub fn loadKey(arena: std.mem.Allocator, file_path: []const u8, key: []const u8) ?[]const u8 {
     const bytes = fsutil.readFileAlloc(arena, file_path) orelse return null;
 
     var it = std.mem.splitScalar(u8, bytes, '\n');
@@ -38,7 +38,7 @@ fn loadKey(arena: std.mem.Allocator, file_path: []const u8, key: []const u8) ?[]
     return null;
 }
 
-fn saveKey(arena: std.mem.Allocator, file_path: []const u8, key: []const u8, value: []const u8) !void {
+pub fn saveKey(arena: std.mem.Allocator, file_path: []const u8, key: []const u8, value: []const u8) !void {
     var keys: std.ArrayList([]const u8) = .empty;
     var vals: std.ArrayList([]const u8) = .empty;
 

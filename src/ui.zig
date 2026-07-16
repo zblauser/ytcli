@@ -28,6 +28,7 @@ const TICK_MS_IDLE: i32 = 250;
 const TYPING_STATUS = "type to search · ↑/↓ pick · ⏎ go · ^C quit";
 
 const Phase = enum { typing, results };
+const Repeat = enum { off, track, queue };
 
 const State = struct {
     phase: Phase = .typing,
@@ -54,6 +55,8 @@ const State = struct {
     queue_idx: usize = 0,
     now_track: ?api.Track = null,
     connecting: bool = false,
+    volume: f64 = 100,
+    repeat: Repeat = .off,
 
     tick: u64 = 0,
 
@@ -92,6 +95,11 @@ pub fn run(
     state.hist_arena = std.heap.ArenaAllocator.init(gpa);
     state.hist_path = history.path(arena, env) catch "";
     state.config_path = config.path(arena, env) catch "";
+    if (state.config_path.len > 0) {
+        if (config.loadKey(arena, state.config_path, "volume")) |v| {
+            state.volume = std.math.clamp(std.fmt.parseFloat(f64, v) catch 100, 0, 100);
+        }
+    }
     if (state.hist_path.len > 0) {
         state.hist = history.load(state.hist_arena.allocator(), state.hist_path) catch &.{};
     }
@@ -232,7 +240,7 @@ fn handleKey(
                 return true;
             },
             0x0e => { // Ctrl+N
-                try queueAdvance(gpa, arena, io, state);
+                try queueAdvance(gpa, arena, io, state, false);
                 return true;
             },
             0x13 => { // Ctrl+S
@@ -240,6 +248,19 @@ fn handleKey(
                     p.stop();
                     state.now_track = null;
                 }
+                return true;
+            },
+            0x12 => { // Ctrl+R
+                state.repeat = switch (state.repeat) {
+                    .off => .track,
+                    .track => .queue,
+                    .queue => .off,
+                };
+                state.status = switch (state.repeat) {
+                    .off => "repeat: off",
+                    .track => "repeat: track",
+                    .queue => "repeat: queue",
+                };
                 return true;
             },
             0x19 => { // Ctrl+Y
@@ -404,10 +425,15 @@ fn handleResults(
                         p.seekRelative(60);
                     },
                     '-', '_' => if (state.pl) |p| {
-                        _ = p.nudgeVolume(-5);
+                        state.volume = p.nudgeVolume(-5);
+                        persistVolume(arena, state);
                     },
                     '=', '+' => if (state.pl) |p| {
-                        _ = p.nudgeVolume(5);
+                        state.volume = p.nudgeVolume(5);
+                        persistVolume(arena, state);
+                    },
+                    'm' => if (state.pl) |p| {
+                        _ = p.toggleMute();
                     },
                     else => {},
                 }
@@ -492,10 +518,18 @@ fn runSearch(gpa: std.mem.Allocator, io: std.Io, state: *State) !void {
     state.status = "↑↓/jk pick · g/G ⌂⌃ · ⏎/l play · h back";
 }
 
+fn persistVolume(arena: std.mem.Allocator, state: *State) void {
+    if (state.config_path.len == 0) return;
+    var buf: [16]u8 = undefined;
+    const s = std.fmt.bufPrint(&buf, "{d:.0}", .{state.volume}) catch return;
+    config.saveKey(arena, state.config_path, "volume", s) catch {};
+}
+
 fn ensurePlayer(gpa: std.mem.Allocator, state: *State) !*player.Player {
     if (state.pl) |p| return p;
     const p = try gpa.create(player.Player);
     p.* = try player.Player.init();
+    p.setVolume(state.volume);
     state.pl = p;
     return p;
 }
@@ -566,9 +600,18 @@ fn playQueueCurrent(gpa: std.mem.Allocator, arena: std.mem.Allocator, io: std.Io
     state.status = "playing";
 }
 
-fn queueAdvance(gpa: std.mem.Allocator, arena: std.mem.Allocator, io: std.Io, state: *State) !void {
+fn queueAdvance(gpa: std.mem.Allocator, arena: std.mem.Allocator, io: std.Io, state: *State, auto: bool) !void {
     if (state.queue.len == 0) return;
+    if (auto and state.repeat == .track) {
+        try playQueueCurrent(gpa, arena, io, state);
+        return;
+    }
     if (state.queue_idx + 1 >= state.queue.len) {
+        if (state.repeat == .queue) {
+            state.queue_idx = 0;
+            try playQueueCurrent(gpa, arena, io, state);
+            return;
+        }
         if (state.pl) |p| {
             p.stop();
             state.now_track = null;
@@ -588,7 +631,7 @@ fn handlePlayerEvent(
     ev: player.Event,
 ) !void {
     switch (ev) {
-        .end_file => try queueAdvance(gpa, arena, io, state),
+        .end_file => try queueAdvance(gpa, arena, io, state, true),
         .shutdown => state.now_track = null,
         else => {},
     }
@@ -741,7 +784,7 @@ fn draw(gpa: std.mem.Allocator, state: *State) !void {
 
     const hint = switch (state.phase) {
         .typing => "tab accept · ⏎ search · esc clear · ^T filter · ^Y theme · ^P pause · ^N next · ^C quit",
-        .results => "jk/↑↓ · gG · ^F/^B · ⏎/l play · h back · [/] seek · -/= vol · ^Y theme · ␣/^P pause · ^N next",
+        .results => "jk/↑↓ · gG · ⏎/l play · h back · [/] seek · -/= vol · m mute · ^R repeat · ^Y theme · ␣/^P pause · ^N next",
     };
     try w.print("{s} {s}{s}\x1b[K", .{ th.dim, hint, th.reset });
     try w.writeAll("\x1b[J");
@@ -924,7 +967,14 @@ fn drawNowPlaying(w: *std.Io.Writer, th: theme_mod.Theme, inner: usize, state: *
     const connecting = state.connecting;
     const paused = pl.isPaused();
 
-    const label = if (connecting) " ⟳ connecting… " else if (paused) " ⏸ paused " else " ▶ playing ";
+    const state_txt = if (connecting) "⟳ connecting…" else if (paused) "⏸ paused" else "▶ playing";
+    const rep = switch (state.repeat) {
+        .off => "",
+        .track => " ↻track",
+        .queue => " ↻queue",
+    };
+    var lbl_buf: [64]u8 = undefined;
+    const label = std.fmt.bufPrint(&lbl_buf, " {s}{s} ", .{ state_txt, rep }) catch " ▶ ";
     try w.print("{s}╭─{s}{s}{s}", .{ th.accent, th.accent_strong, label, th.reset });
     try w.writeAll(th.accent);
     var i: usize = 0;
@@ -957,8 +1007,9 @@ fn drawNowPlaying(w: *std.Io.Writer, th: theme_mod.Theme, inner: usize, state: *
         const frac: f64 = if (dur > 0) std.math.clamp(pos / dur, 0, 1) else 0;
 
         var time_buf: [128]u8 = undefined;
+        const muted = pl.isMuted();
         const vol: u32 = @intFromFloat(pl.volume());
-        const filled_vol = vol / 10;
+        const filled_vol: u32 = if (muted) 0 else vol / 10;
         var vol_buf: [64]u8 = undefined;
         var vw: std.Io.Writer = .fixed(&vol_buf);
         var vbi: u32 = 0;
@@ -967,7 +1018,10 @@ fn drawNowPlaying(w: *std.Io.Writer, th: theme_mod.Theme, inner: usize, state: *
         }
         var pos_buf: [16]u8 = undefined;
         var dur_buf: [16]u8 = undefined;
-        const time_str = std.fmt.bufPrint(&time_buf, "  {s} / {s}  vol {s} {d:0>3}", .{ fmtTime(&pos_buf, pos), fmtTime(&dur_buf, dur), vw.buffered(), vol }) catch "";
+        const time_str = if (muted)
+            std.fmt.bufPrint(&time_buf, "  {s} / {s}  vol {s} mute", .{ fmtTime(&pos_buf, pos), fmtTime(&dur_buf, dur), vw.buffered() }) catch ""
+        else
+            std.fmt.bufPrint(&time_buf, "  {s} / {s}  vol {s} {d:0>3}", .{ fmtTime(&pos_buf, pos), fmtTime(&dur_buf, dur), vw.buffered(), vol }) catch "";
         const time_cols = visibleCols(time_str);
 
         const bar_room = room -| time_cols;
@@ -985,7 +1039,7 @@ fn drawNowPlaying(w: *std.Io.Writer, th: theme_mod.Theme, inner: usize, state: *
     {
         try w.print("{s}│{s} ", .{ th.accent, th.reset });
         const room = inner -| 1;
-        const idle = paused or connecting;
+        const idle = paused or connecting or pl.isMuted();
         const rms = if (idle) 0 else pl.rmsLevel();
         try drawBars(w, th, room, state.tick, idle, rms);
         try w.print("{s}│{s}\r\n", .{ th.accent, th.reset });
@@ -1058,8 +1112,10 @@ fn drawBars(w: *std.Io.Writer, th: theme_mod.Theme, room: usize, tick: u64, paus
 
 fn fmtTime(buf: []u8, secs: f64) []const u8 {
     const total: u32 = @intFromFloat(@max(0, secs));
-    const m = total / 60;
+    const h = total / 3600;
+    const m = (total % 3600) / 60;
     const s = total % 60;
+    if (h > 0) return std.fmt.bufPrint(buf, "{d}:{d:0>2}:{d:0>2}", .{ h, m, s }) catch "0:00:00";
     return std.fmt.bufPrint(buf, "{d:0>2}:{d:0>2}", .{ m, s }) catch "00:00";
 }
 
@@ -1132,6 +1188,8 @@ test "fmtTime formats mm:ss and clamps negatives" {
     try testing.expectEqualStrings("01:05", fmtTime(&buf, 65));
     try testing.expectEqualStrings("10:00", fmtTime(&buf, 600));
     try testing.expectEqualStrings("00:00", fmtTime(&buf, -3));
+    try testing.expectEqualStrings("1:15:00", fmtTime(&buf, 4500));
+    try testing.expectEqualStrings("1:00:05", fmtTime(&buf, 3605));
 }
 
 test "clampScroll keeps selection within the viewport" {
